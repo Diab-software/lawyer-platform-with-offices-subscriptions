@@ -1,5 +1,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { supabase } from '@/lib/supabase';
+import { User as SupabaseUser } from '@supabase/supabase-js';
 
 export type UserRole = 'lawyer' | 'trainee' | 'client' | 'admin';
 
@@ -28,23 +30,103 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // TODO: Check for existing session
-    setLoading(false);
+    // Check active session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        loadUserProfile(session.user);
+      } else {
+        setLoading(false);
+      }
+    });
+
+    // Listen for auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        loadUserProfile(session.user);
+      } else {
+        setUser(null);
+        setLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
+  const loadUserProfile = async (supabaseUser: SupabaseUser) => {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', supabaseUser.id)
+        .single();
+
+      if (error) throw error;
+
+      if (data) {
+        setUser({
+          id: data.id,
+          email: data.email,
+          role: data.role,
+          name: data.name,
+          verified: data.verified || false,
+          subscriptionActive: data.subscription_active,
+          subscriptionAmount: data.subscription_amount,
+        });
+      }
+    } catch (error) {
+      console.error('Error loading user profile:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const login = async (email: string, password: string) => {
-    // TODO: Implement login logic
-    console.log('Login:', email, password);
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) throw error;
+    if (data.user) {
+      await loadUserProfile(data.user);
+    }
   };
 
   const logout = async () => {
-    // TODO: Implement logout logic
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
     setUser(null);
   };
 
   const register = async (email: string, password: string, role: UserRole, name: string) => {
-    // TODO: Implement registration logic
-    console.log('Register:', email, password, role, name);
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          name,
+          role,
+        },
+      },
+    });
+
+    if (error) throw error;
+
+    if (data.user) {
+      // Create user profile
+      const { error: profileError } = await supabase.from('users').insert({
+        id: data.user.id,
+        email,
+        name,
+        role,
+        verified: false,
+      });
+
+      if (profileError) throw profileError;
+      await loadUserProfile(data.user);
+    }
   };
 
   return (
